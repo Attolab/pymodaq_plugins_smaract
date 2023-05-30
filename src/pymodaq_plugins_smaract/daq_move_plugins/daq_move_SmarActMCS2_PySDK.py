@@ -236,9 +236,9 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
         # No sensor
             else:
                 self.move_mode = ctl.MoveMode.STEP
-                ctlerr('SetProperty_i64', self.controller, channel, ctl.Property.STEP_FREQUENCY,
+                ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.STEP_FREQUENCY,
                        self.settings.child("stage_parameters", 'step_frequency').value())
-                ctlerr('SetProperty_i64', self.controller, channel, ctl.Property.STEP_AMPLITUDE,
+                ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.STEP_AMPLITUDE,
                        self.settings.child("stage_parameters", 'step_amplitude').value())
                 self.settings.child("stage_parameters", 'move_acceleration').hide()
                 self.settings.child("stage_parameters", 'move_velocity').hide()
