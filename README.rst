@@ -33,7 +33,8 @@ Actuators
 
 * **SmaractMCS** SLC linear stages with sensor (S option) with MCS controller
 * **SmaractMCS2** SLC linear stages with sensor (S option) with MCS2 controller
-* **Smaract** SLC linear or angular stages with or without sensors using the Instrumental-lib package
+* **Smaract** SLC linear or angular stages with or without sensors with SCU controller, using the Instrumental-lib package
+* **SmaractMCS2_PySDK** Stages controlled with MCS2 controller, using the new Python Smaract SDK
 
 
 System requirements
