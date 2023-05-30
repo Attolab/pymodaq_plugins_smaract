@@ -190,40 +190,35 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
             self.ini_stage_init(old_controller=controller,
                                 new_controller=ctlerr('Open', self.settings.child('controller_parameters',
                                                                             'controller_locator').value()))
+
             channel = self.settings.child('multiaxes', 'axis').value()
-            channel_type = ctlerr('GetProperty_i32', self.controller, channel, ctl.Property.CHANNEL_TYPE)
-
-            if channel_type == ctl.ChannelModuleType.STICK_SLIP_PIEZO_DRIVER:
-                # Set max closed loop frequency (maxCLF) to 6 kHz. This properties sets a limit for the maximum actuator driving frequency.
-                # The maxCLF is not persistent thus set to a default value at startup.
-                ctlerr('SetProperty_i32',self.controller, channel, ctl.Property.MAX_CL_FREQUENCY,
-                                    self.settings.child("stage_parameters", 'max_cl_freq').value())
-                # The hold time specifies how long the position is actively held after reaching the target.
-                # This property is also not persistent and set to zero by default.
-                # A value of 0 deactivates the hold time feature, the constant ctl.HOLD_TIME_INFINITE sets the time to infinite.
-                # (Until manually stopped by "Stop") Here we set the hold time to 1000 ms.
-                ctlerr('SetProperty_i32',self.controller, channel, ctl.Property.HOLD_TIME,
-                                    self.settings.child("stage_parameters", 'hold_time').value())
-
-
-
-
-            elif channel_type == ctl.ChannelModuleType.MAGNETIC_DRIVER:
-                # Enable the amplifier (and start the phasing sequence).
-                ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.AMPLIFIER_ENABLED, ctl.TRUE)
-                self.settings.child("stage_parameters", 'hold_time').hide()
-                self.settings.child("stage_parameters", 'max_cl_freq').hide()
-
-            else:
-                self.settings.child("stage_parameters", 'hold_time').hide()
-                self.settings.child("stage_parameters", 'max_cl_freq').hide()
-
             channel_state = ctlerr('GetProperty_i32', self.controller, channel, ctl.Property.CHANNEL_STATE)
 
             # Check if the stage has a sensor
             self.has_sensor = ctl.ChannelState.SENSOR_PRESENT & channel_state
 
             if self.has_sensor:
+                channel_type = ctlerr('GetProperty_i32', self.controller, channel, ctl.Property.CHANNEL_TYPE)
+                if channel_type == ctl.ChannelModuleType.STICK_SLIP_PIEZO_DRIVER:
+                    # Set max closed loop frequency (maxCLF) to 6 kHz. This properties sets a limit for the maximum actuator driving frequency.
+                    # The maxCLF is not persistent thus set to a default value at startup.
+                    ctlerr('SetProperty_i32',self.controller, channel, ctl.Property.MAX_CL_FREQUENCY,
+                                        self.settings.child("stage_parameters", 'max_cl_freq').value())
+                    # The hold time specifies how long the position is actively held after reaching the target.
+                    # This property is also not persistent and set to zero by default.
+                    # A value of 0 deactivates the hold time feature, the constant ctl.HOLD_TIME_INFINITE sets the time to infinite.
+                    # (Until manually stopped by "Stop") Here we set the hold time to 1000 ms.
+                    ctlerr('SetProperty_i32',self.controller, channel, ctl.Property.HOLD_TIME,
+                                        self.settings.child("stage_parameters", 'hold_time').value())
+                elif channel_type == ctl.ChannelModuleType.MAGNETIC_DRIVER:
+                    # Enable the amplifier (and start the phasing sequence).
+                    ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.AMPLIFIER_ENABLED, ctl.TRUE)
+                    self.settings.child("stage_parameters", 'hold_time').hide()
+                    self.settings.child("stage_parameters", 'max_cl_freq').hide()
+                else:
+                    self.settings.child("stage_parameters", 'hold_time').hide()
+                    self.settings.child("stage_parameters", 'max_cl_freq').hide()
+
                 self.move_mode = ctl.MoveMode.CL_ABSOLUTE
                 ctlerr('SetProperty_i64', self.controller, channel, ctl.Property.MOVE_VELOCITY,
                        round(self.settings.child("stage_parameters", 'move_velocity').value()*1e9))
@@ -232,6 +227,13 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
                 self.settings.child("stage_parameters", 'step_frequency').hide()
                 self.settings.child("stage_parameters", 'step_amplitude').hide()
 
+                # Check referencing
+                self.settings.child('stage_parameters', 'is_referenced').setValue(
+                    ctl.ChannelState.IS_REFERENCED & channel_state)
+                self.settings.child('stage_parameters', 'is_calibrated').setValue(
+                    ctl.ChannelState.IS_CALIBRATED & channel_state)
+
+        # No sensor
             else:
                 self.move_mode = ctl.MoveMode.STEP
                 ctlerr('SetProperty_i64', self.controller, channel, ctl.Property.STEP_FREQUENCY,
@@ -240,11 +242,11 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
                        self.settings.child("stage_parameters", 'step_amplitude').value())
                 self.settings.child("stage_parameters", 'move_acceleration').hide()
                 self.settings.child("stage_parameters", 'move_velocity').hide()
-
+                self.settings.child('stage_parameters', 'is_referenced').hide()
+                self.settings.child('stage_parameters', 'is_calibrated').hide()
 
             # Set Move Mode
             ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.MOVE_MODE, self.move_mode)
-
 
             # Get units
             if self.has_sensor:
@@ -255,10 +257,6 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
             else:
                 self.controller_units = 'steps'
                 self.step_position = 0
-
-            # Check referencing
-            self.settings.child('stage_parameters', 'is_referenced').setValue(ctl.ChannelState.IS_REFERENCED & channel_state)
-            self.settings.child('stage_parameters', 'is_calibrated').setValue(ctl.ChannelState.IS_CALIBRATED & channel_state)
 
             initialized = True
             info = "Smaract stage initialized"
