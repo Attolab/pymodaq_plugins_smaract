@@ -2,12 +2,29 @@ from pymodaq.control_modules.move_utility_classes import DAQ_Move_base, comon_pa
 from pymodaq.daq_utils.daq_utils import ThreadCommand, getLineInfo  # object used to send info back to the main thread
 from pymodaq.daq_utils.parameter import Parameter
 from pymodaq.daq_utils.config import Config
+import time
 config = Config()
 
 try:
     import smaract.ctl as ctl
 except ImportError:
     raise RuntimeError("The Smaract Python SDK was not found.")
+
+
+def ctlerr(func_name, *args):
+    # Little hack to call the library function with a try/error clause everytime, instead of typing it
+
+    def func_not_found():  # just in case we dont have the function
+        raise RuntimeError('Function '+func_name+' was not found in the library.')
+
+    func = getattr(ctl, func_name, func_not_found)
+
+    try:
+        return func(*args)
+
+    except ctl.Error as e:
+        raise RuntimeError(e)
+
 
 def assert_lib_compatibility():
     """
@@ -44,7 +61,7 @@ def assert_lib_compatibility():
 version = ctl.GetFullVersionString()
 assert_lib_compatibility()
 
-buffer = ctl.FindDevices()
+buffer = ctlerr('FindDevices')
 if len(buffer) == 0:
     raise RuntimeError("No Smaract MCS2 devices found.")
 controller_locators = buffer.split("\n")
@@ -69,6 +86,8 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
     max_bound = +61500  # µm
 
     offset = 0  # µm
+    move_mode = None
+    step_position = 0
 
     params = [
                  {'title': 'Controller parameters:',
@@ -93,10 +112,46 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
                   'name': 'stage_parameters',
                   'type': 'group',
                   'children': [
-                      {'title': 'Max. Closed Loop Frequency:',
+                      {'title': 'Is referenced:',
+                       'name': 'is_referenced',
+                       'type': 'led',
+                       'value': False},
+                      {'title': 'Is calibrated:',
+                       'name': 'is_calibrated',
+                       'type': 'led',
+                       'value': False},
+                      {'title': 'Max. Closed Loop Frequency (Hz):',
                        'name': 'max_cl_freq',
-                       'type': int,
-                       'value': 6000},
+                       'type': 'int',
+                       'value': 18500},
+                      {'title': 'Holding time (ms):',
+                       'name': 'hold_time',
+                       'type': 'int',
+                       'value': 1000},
+                      {'title': 'Quiet mode:',
+                       'name': 'quiet_mode',
+                       'type': 'bool',
+                       'value': False},
+                      {'title': 'Move velocity (mm/s):',
+                       'name': 'move_velocity',
+                       'type': 'int',
+                       'value': 10},
+                      {'title': 'Move acceleration (mm/s2):',
+                       'name': 'move_acceleration',
+                       'type': 'int',
+                       'value': 100},
+                      {'title': 'Step frequency (Hz):',
+                       'name': 'step_frequency',
+                       'type': 'int',
+                       'value': 1000,
+                       'min': 1,
+                       'max': 20000},
+                      {'title': 'Step amplitude',
+                       'name': 'step_amplitude',
+                       'type': 'int',
+                       'value': 65535,
+                       'min': 0,
+                       'max': 65535}
                   ]}
              ] + comon_parameters_fun(is_multiaxes, axes_names)
 
@@ -133,31 +188,85 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
 
         try:
             self.ini_stage_init(old_controller=controller,
-                                new_controller=ctl.Open(self.settings.child('controller_parameters',
+                                new_controller=ctlerr('Open', self.settings.child('controller_parameters',
                                                                             'controller_locator').value()))
             channel = self.settings.child('multiaxes', 'axis').value()
-            type = ctl.GetProperty_i32(self.controller, channel, ctl.Property.CHANNEL_TYPE)
+            channel_type = ctlerr('GetProperty_i32', self.controller, channel, ctl.Property.CHANNEL_TYPE)
 
-            if type == ctl.ChannelModuleType.STICK_SLIP_PIEZO_DRIVER:
+            if channel_type == ctl.ChannelModuleType.STICK_SLIP_PIEZO_DRIVER:
                 # Set max closed loop frequency (maxCLF) to 6 kHz. This properties sets a limit for the maximum actuator driving frequency.
                 # The maxCLF is not persistent thus set to a default value at startup.
-                ctl.SetProperty_i32(self.controller, channel, ctl.Property.MAX_CL_FREQUENCY, 6000)
+                ctlerr('SetProperty_i32',self.controller, channel, ctl.Property.MAX_CL_FREQUENCY,
+                                    self.settings.child("stage_parameters", 'max_cl_freq').value())
                 # The hold time specifies how long the position is actively held after reaching the target.
                 # This property is also not persistent and set to zero by default.
                 # A value of 0 deactivates the hold time feature, the constant ctl.HOLD_TIME_INFINITE sets the time to infinite.
                 # (Until manually stopped by "Stop") Here we set the hold time to 1000 ms.
-                ctl.SetProperty_i32(self.controller, channel, ctl.Property.HOLD_TIME, 1000)
-            elif type == ctl.ChannelModuleType.MAGNETIC_DRIVER:
-                # Enable the amplifier (and start the phasing sequence).
-                ctl.SetProperty_i32(self.controller, channel, ctl.Property.AMPLIFIER_ENABLED, ctl.TRUE)
+                ctlerr('SetProperty_i32',self.controller, channel, ctl.Property.HOLD_TIME,
+                                    self.settings.child("stage_parameters", 'hold_time').value())
 
-            self.has_sensor = ctl.ChannelState.SENSOR_PRESENT
+
+
+
+            elif channel_type == ctl.ChannelModuleType.MAGNETIC_DRIVER:
+                # Enable the amplifier (and start the phasing sequence).
+                ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.AMPLIFIER_ENABLED, ctl.TRUE)
+                self.settings.child("stage_parameters", 'hold_time').hide()
+                self.settings.child("stage_parameters", 'max_cl_freq').hide()
+
+            else:
+                self.settings.child("stage_parameters", 'hold_time').hide()
+                self.settings.child("stage_parameters", 'max_cl_freq').hide()
+
+            channel_state = ctlerr('GetProperty_i32', self.controller, channel, ctl.Property.CHANNEL_STATE)
+
+            # Check if the stage has a sensor
+            self.has_sensor = ctl.ChannelState.SENSOR_PRESENT & channel_state
+
+            if self.has_sensor:
+                self.move_mode = ctl.MoveMode.CL_ABSOLUTE
+                ctlerr('SetProperty_i64', self.controller, channel, ctl.Property.MOVE_VELOCITY,
+                       round(self.settings.child("stage_parameters", 'move_velocity').value()*1e9))
+                ctlerr('SetProperty_i64', self.controller, channel, ctl.Property.MOVE_ACCELERATION,
+                       round(self.settings.child("stage_parameters", 'move_acceleration').value()*1e9))
+                self.settings.child("stage_parameters", 'step_frequency').hide()
+                self.settings.child("stage_parameters", 'step_amplitude').hide()
+
+            else:
+                self.move_mode = ctl.MoveMode.STEP
+                ctlerr('SetProperty_i64', self.controller, channel, ctl.Property.STEP_FREQUENCY,
+                       self.settings.child("stage_parameters", 'step_frequency').value())
+                ctlerr('SetProperty_i64', self.controller, channel, ctl.Property.STEP_AMPLITUDE,
+                       self.settings.child("stage_parameters", 'step_amplitude').value())
+                self.settings.child("stage_parameters", 'move_acceleration').hide()
+                self.settings.child("stage_parameters", 'move_velocity').hide()
+
+
+            # Set Move Mode
+            ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.MOVE_MODE, self.move_mode)
+
+
+            # Get units
+            if self.has_sensor:
+                if ctlerr('GetProperty_i32', self.controller, channel, ctl.Property.POS_BASE_UNIT) == ctl.BaseUnit.METER:
+                    self.controller_units = 'µm'    # linear stages output picometers but we will convert to microns
+                elif ctlerr('GetProperty_i32', self.controller, channel, ctl.Property.POS_BASE_UNIT) == ctl.BaseUnit.DEGREE:
+                    self.controller_units = 'mdeg'  # rotationary stages output nanodegrees but we will convert it to mdeg
+            else:
+                self.controller_units = 'steps'
+                self.step_position = 0
+
+            # Check referencing
+            self.settings.child('stage_parameters', 'is_referenced').setValue(ctl.ChannelState.IS_REFERENCED & channel_state)
+            self.settings.child('stage_parameters', 'is_calibrated').setValue(ctl.ChannelState.IS_CALIBRATED & channel_state)
 
             initialized = True
-        except:
+            info = "Smaract stage initialized"
+
+        except Exception as e:
+            info = "Error: " + str(e)
             initialized = False
 
-        info = "Smaract stage initialized"
         return info, initialized
 
 
@@ -169,16 +278,22 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
         float: The position obtained after scaling conversion.
         """
         channel = self.settings.child('multiaxes', 'axis').value()
-        pos = ctl.GetProperty_i64(self.controller, channel, ctl.Property.POSITION)
-        pos = float(pos) / 1e6  # the position given by the
-        # controller is in picometers, we convert in micrometers
+
+        if self.has_sensor:
+            pos = ctlerr('GetProperty_i64', self.controller, channel, ctl.Property.POSITION)
+            pos = float(pos) / 1e6  # the position given by the
+            # controller is in picometers, we convert in micrometers
+        else:
+            pos = self.step_position
+
         pos = self.get_position_with_scaling(pos)
         return pos
 
     def close(self):
         """Close the communication with the MCS2 controller.
         """
-        self.controller.close_communication()
+        if self.controller is not None:
+            ctlerr('Close', self.controller)
         self.controller = None
 
     def commit_settings(self, param: Parameter):
@@ -187,8 +302,31 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
             |
             | Called after a param_tree_changed signal from DAQ_Move_main.
         # Unused
-
         """
+        if param.name == 'max_cl_freq':
+            channel = self.settings.child('multiaxes', 'axis').value()
+            ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.MAX_CL_FREQUENCY,
+                            self.settings.child("stage_parameters", 'max_cl_freq').value())
+
+        elif param.name == 'hold_time':
+            channel = self.settings.child('multiaxes', 'axis').value()
+            ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.HOLD_TIME,
+                                self.settings.child("stage_parameters", 'hold_time').value())
+
+        elif param.name() == 'quiet_mode':
+            channel = self.settings.child('multiaxes', 'axis').value()
+            if param.value():
+                ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.ACTUATOR_MODE, ctl.ActuatorMode.QUIET)
+            else:
+                ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.ACTUATOR_MODE, ctl.ActuatorMode.NORMAL)
+
+        elif param.name() == 'move_velocity':
+            ctlerr('SetProperty_i64', self.controller, self.settings.child('multiaxes', 'axis').value(), ctl.Property.MOVE_VELOCITY,
+                   round(self.settings.child("stage_parameters", 'move_velocity').value() * 1e9))
+
+        elif param.name() == 'move_acceleration':
+            ctlerr('SetProperty_i64', self.controller, self.settings.child('multiaxes', 'axis').value(), ctl.Property.MOVE_ACCELERATION,
+                   round(self.settings.child("stage_parameters", 'move_acceleration').value() * 1e9))
 
     def move_abs(self, value):
         """ Move the actuator to the absolute target defined by value
@@ -197,14 +335,26 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
         ----------
         value: (float) value of the absolute target positioning
         """
+        channel = self.settings.child('multiaxes', 'axis').value()
 
         value = self.check_bound(value)  # if user checked bounds, the defined bounds are applied here
         self.target_value = value
         value = self.set_position_with_scaling(value)  # apply scaling if the user specified one
-        value = int(value * 1e6)
-        self.controller.absolute_move(
-            self.settings.child('multiaxes', 'axis').value(), value)
+
+        if self.has_sensor:
+            if self.move_mode == ctl.MoveMode.CL_RELATIVE:  # Switch to absolute
+                self.move_mode = ctl.MoveMode.CL_ABSOLUTE
+                ctlerr('SetProperty_i32',self.controller, channel, ctl.Property.MOVE_MODE, self.move_mode)
+            value = int(value * 1e6)  # Back to picometers or nanodegrees
+
+        ctlerr('Move', self.controller, channel, value, 0)
+
+        if not self.has_sensor:
+            self.current_position = value
+            self.step_position = value
+
         self.emit_status(ThreadCommand('Update_Status', [f'Moving to {self.target_value}']))
+
 
     def move_rel(self, value):
         """ Move the actuator to the relative target actuator value defined by value
@@ -213,29 +363,52 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
         ----------
         value: (float) value of the relative target positioning
         """
-        value = self.check_bound(self.current_position + value) - self.current_position
-        self.target_value = value + self.current_position
+        channel = self.settings.child('multiaxes', 'axis').value()
+        cur_pos = self.get_actuator_value()
+
+        value = self.check_bound(cur_pos + value) - cur_pos
         relative_move = self.set_position_relative_with_scaling(value)
 
-        # convert relative_move in picometers
-        relative_move = int(relative_move*1e6)
+        if self.has_sensor:     # If not, value will be understood as a number of steps
+            if self.move_mode == ctl.MoveMode.CL_ABSOLUTE:  # Switch to relative
+                self.move_mode = ctl.MoveMode.CL_RELATIVE
+                ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.MOVE_MODE, self.move_mode)
+            value = int(relative_move * 1e6)  # Back to picometers or nanodegrees
 
-        self.controller.relative_move(
-            self.settings.child('multiaxes', 'axis').value(),
-            relative_move)
-        self.emit_status(ThreadCommand('Update_Status', [f'Moving to {self.target_value}']))
+        ctlerr('Move', self.controller, channel, value, 0)
+
+        if not self.has_sensor:
+            self.current_position += value
+            self.step_position += value
+
+        self.emit_status(ThreadCommand('Update_Status', [f'Relative move by {relative_move}']))
+
 
     def move_home(self):
         """Move to the physical reference and reset position to 0
         """
-        self.controller.find_reference(
-            self.settings.child('multiaxes', 'axis').value())
+        channel = self.settings.child('multiaxes', 'axis').value()
+        ctlerr('Reference', self.controller, channel)
         self.emit_status(ThreadCommand('Update_Status',
-                                       ['The positioner has been referenced']))
+                                       ['Referencing has been launched']))
+
+        channel_state = ctlerr('GetProperty_i32', self.controller, channel, ctl.Property.CHANNEL_STATE)
+
+        # wait for referencing to be done
+        while channel_state & ctl.ChannelState.REFERENCING:
+            time.sleep(1)
+            channel_state = ctlerr('GetProperty_i32', self.controller, channel, ctl.Property.CHANNEL_STATE)
+
+        self.parent.check_position()
+        if channel_state & ctl.ChannelState.IS_REFERENCED:
+            self.settings.child('stage_parameters', 'is_referenced').setValue(True)
+        else:
+            self.settings.child('stage_parameters', 'is_referenced').setValue(False)
+
 
     def stop_motion(self):
         """Stop the actuator and emits move_done signal"""
-        self.controller.stop(self.settings.child('multiaxes', 'axis').value())
+        ctlerr('Stop', self.controller, self.settings.child('multiaxes', 'axis').value())
         self.emit_status(ThreadCommand('Update_Status',
                                        ['The positioner has been stopped']))
 
