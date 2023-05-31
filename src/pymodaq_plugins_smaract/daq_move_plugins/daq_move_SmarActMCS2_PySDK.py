@@ -165,6 +165,12 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
     def ini_attributes(self):
         self.controller: ctl.Open = None
 
+    def ini_device(self):
+        if self.settings['multiaxes', 'ismultiaxes'] and self.settings['multiaxes', 'multi_status'] == "Slave":
+            pass
+        else:
+            return ctlerr('Open', self.settings.child('controller_parameters', 'controller_locator').value())
+
     def ini_stage(self, controller=None):
         """Actuator communication initialization
 
@@ -195,8 +201,7 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
 
         try:
             self.ini_stage_init(old_controller=controller,
-                                new_controller=ctlerr('Open', self.settings.child('controller_parameters',
-                                                                            'controller_locator').value()))
+                                new_controller=self.ini_device())
 
             channel = self.settings.child('multiaxes', 'axis').value()
             channel_state = ctlerr('GetProperty_i32', self.controller, channel, ctl.Property.CHANNEL_STATE)
@@ -271,8 +276,9 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
             info = "Smaract stage initialized"
 
         except Exception as e:
-            info = "Error: " + str(e)
+            info = str(e)
             initialized = False
+            print(e)
 
         return info, initialized
 
