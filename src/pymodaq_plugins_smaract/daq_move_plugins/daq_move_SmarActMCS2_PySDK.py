@@ -240,6 +240,8 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
                        self.settings.child("stage_parameters", 'step_frequency').value())
                 ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.STEP_AMPLITUDE,
                        self.settings.child("stage_parameters", 'step_amplitude').value())
+                self.settings.child("stage_parameters", 'max_cl_freq').hide()
+                self.settings.child("stage_parameters", 'hold_time').hide()
                 self.settings.child("stage_parameters", 'move_acceleration').hide()
                 self.settings.child("stage_parameters", 'move_velocity').hide()
                 self.settings.child('stage_parameters', 'is_referenced').hide()
@@ -354,15 +356,14 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
                 self.move_mode = ctl.MoveMode.CL_ABSOLUTE
                 ctlerr('SetProperty_i32',self.controller, channel, ctl.Property.MOVE_MODE, self.move_mode)
             value *= 1e6  # Back to picometers or nanodegrees
-
-        # Move command
-        ctlerr('Move', self.controller, channel, int(value), 0)
+            # Move command
+            ctlerr('Move', self.controller, channel, int(value), 0)
 
         # If in step mode, we manually update the position
-        if not self.has_sensor:
-            self.current_position = value
-            self.step_position = value
-            self.parent.check_position()
+        else:
+            # In step mode we can only do relative
+            rel_move = value - self.step_position
+            self.move_rel(rel_move)
 
         self.emit_status(ThreadCommand('Update_Status', [f'Moving to {self.target_value}']))
 
