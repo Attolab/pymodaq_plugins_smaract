@@ -10,18 +10,37 @@ try:
 except ImportError:
     raise RuntimeError("The Smaract Python SDK was not found.")
 
+"""
+    =================================================================================
+    This plugin handles SmarAct MCS2 controller, using the Python SDK provided by Smaract.
+    The python SDK is only present in newer installers and has special install instructions, see 
+    the documentation file "Using SmarAct Python SDKs.pdf".
+
+    If you use the first version of MCS controller use the daq_move_SmarActMCS
+    plugin instead.
+    The SmarAct MCS2 installer should be executed for this plugin to work.
+    We suppose that the configuration of the controller and the positioners
+    (sensor type…) has been done via the SmarAct MCS2ServiceTool software.
+
+    If the controller is not switched on, the plugin will not be suggested in
+    the list in the GUI of the daq_move.
+
+    ==================================================================================
+"""
+
 
 def ctlerr(func_name, *args):
-    # Little hack to call the library function with a try/error clause everytime, instead of typing it
-
+    # By default, the SDK functions do not return errors, so we need to catch them.
+    # This is a little hack to call the library function with a try/error clause everytime, instead of typing it
+    # Instead of calling "ctl.Move(d_handle, channel, value, 0)"
+    # We can use "ctlerr('Move', d_handle, channel, value, 0)". This will execute the command, and raise
+    # a runtime error if the SDK function finds an error.
     def func_not_found():  # just in case we dont have the function
         raise RuntimeError('Function '+func_name+' was not found in the library.')
 
     func = getattr(ctl, func_name, func_not_found)
-
     try:
         return func(*args)
-
     except ctl.Error as e:
         raise RuntimeError(e)
 
@@ -38,25 +57,6 @@ def assert_lib_compatibility():
     if vapi[0] != vlib[0]:
         raise RuntimeError("Incompatible SmarActCTL python api and library version.")
 
-
-"""
-    =================================================================================
-    
-    This plugin handles SmarAct MCS2 controller, using the Python SDK provided by Smaract.
-    The python SDK is only present in newer installers and has special install instructions, see 
-    the documentation file "Using SmarAct Python SDKs.pdf".
-
-    If you use the first version of MCS controller use the daq_move_SmarActMCS
-    plugin instead.
-    The SmarAct MCS2 installer should be executed for this plugin to work.
-    We suppose that the configuration of the controller and the positioners
-    (sensor type…) has been done via the SmarAct MCS2ServiceTool software.
-
-    If the controller is not switched on, the plugin will not be suggested in
-    the list in the GUI of the daq_move.
-    
-    ==================================================================================
-"""
 
 version = ctl.GetFullVersionString()
 assert_lib_compatibility()
@@ -326,6 +326,16 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
             ctlerr('SetProperty_i64', self.controller, self.settings.child('multiaxes', 'axis').value(), ctl.Property.MOVE_ACCELERATION,
                    round(self.settings.child("stage_parameters", 'move_acceleration').value() * 1e9))
 
+        elif param.name() == 'step_amplitude':
+            ctlerr('SetProperty_i32', self.controller, self.settings.child('multiaxes', 'axis').value(),
+                   ctl.Property.STEP_AMPLITUDE,
+                   round(self.settings.child("stage_parameters", 'step_amplitude').value()))
+
+        elif param.name() == 'step_frequency':
+            ctlerr('SetProperty_i32', self.controller, self.settings.child('multiaxes', 'axis').value(),
+                   ctl.Property.STEP_FREQUENCY,
+                   round(self.settings.child("stage_parameters", 'step_frequency').value()))
+
     def move_abs(self, value):
         """ Move the actuator to the absolute target defined by value
 
@@ -343,13 +353,16 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
             if self.move_mode == ctl.MoveMode.CL_RELATIVE:  # Switch to absolute
                 self.move_mode = ctl.MoveMode.CL_ABSOLUTE
                 ctlerr('SetProperty_i32',self.controller, channel, ctl.Property.MOVE_MODE, self.move_mode)
-            value = int(value * 1e6)  # Back to picometers or nanodegrees
+            value *= 1e6  # Back to picometers or nanodegrees
 
-        ctlerr('Move', self.controller, channel, value, 0)
+        # Move command
+        ctlerr('Move', self.controller, channel, int(value), 0)
 
+        # If in step mode, we manually update the position
         if not self.has_sensor:
             self.current_position = value
             self.step_position = value
+            self.parent.check_position()
 
         self.emit_status(ThreadCommand('Update_Status', [f'Moving to {self.target_value}']))
 
@@ -371,13 +384,16 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
             if self.move_mode == ctl.MoveMode.CL_ABSOLUTE:  # Switch to relative
                 self.move_mode = ctl.MoveMode.CL_RELATIVE
                 ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.MOVE_MODE, self.move_mode)
-            value = int(relative_move * 1e6)  # Back to picometers or nanodegrees
+            value = relative_move * 1e6  # Back to picometers or nanodegrees
 
-        ctlerr('Move', self.controller, channel, value, 0)
+        # Move command
+        ctlerr('Move', self.controller, channel, int(value), 0)
 
+        # If in step mode, we manually update the position
         if not self.has_sensor:
             self.current_position += value
             self.step_position += value
+            self.parent.check_position()
 
         self.emit_status(ThreadCommand('Update_Status', [f'Relative move by {relative_move}']))
 
