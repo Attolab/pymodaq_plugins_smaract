@@ -123,11 +123,14 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
                       {'title': 'Max. Closed Loop Frequency (Hz):',
                        'name': 'max_cl_freq',
                        'type': 'int',
-                       'value': 18500},
+                       'value': 18500,
+                       'min': 50,
+                       'max': 20000},
                       {'title': 'Holding time (ms):',
                        'name': 'hold_time',
                        'type': 'int',
-                       'value': 1000},
+                       'value': 1000,
+                       'min': 0},
                       {'title': 'Quiet mode:',
                        'name': 'quiet_mode',
                        'type': 'bool',
@@ -135,11 +138,15 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
                       {'title': 'Move velocity (mm/s):',
                        'name': 'move_velocity',
                        'type': 'int',
-                       'value': 10},
+                       'value': 0,
+                       'min': 0,
+                       'max': 100},  # 100e9 pm/s
                       {'title': 'Move acceleration (mm/s2):',
                        'name': 'move_acceleration',
                        'type': 'int',
-                       'value': 100},
+                       'value': 0,
+                       'min': 0,
+                       'max': 10000},  # 10e12 pm/s2
                       {'title': 'Step frequency (Hz):',
                        'name': 'step_frequency',
                        'type': 'int',
@@ -157,6 +164,12 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
 
     def ini_attributes(self):
         self.controller: ctl.Open = None
+
+    def ini_device(self):
+        if self.settings['multiaxes', 'ismultiaxes'] and self.settings['multiaxes', 'multi_status'] == "Slave":
+            pass
+        else:
+            return ctlerr('Open', self.settings.child('controller_parameters', 'controller_locator').value())
 
     def ini_stage(self, controller=None):
         """Actuator communication initialization
@@ -188,8 +201,7 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
 
         try:
             self.ini_stage_init(old_controller=controller,
-                                new_controller=ctlerr('Open', self.settings.child('controller_parameters',
-                                                                            'controller_locator').value()))
+                                new_controller=self.ini_device())
 
             channel = self.settings.child('multiaxes', 'axis').value()
             channel_state = ctlerr('GetProperty_i32', self.controller, channel, ctl.Property.CHANNEL_STATE)
@@ -240,6 +252,8 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
                        self.settings.child("stage_parameters", 'step_frequency').value())
                 ctlerr('SetProperty_i32', self.controller, channel, ctl.Property.STEP_AMPLITUDE,
                        self.settings.child("stage_parameters", 'step_amplitude').value())
+                self.settings.child("stage_parameters", 'max_cl_freq').hide()
+                self.settings.child("stage_parameters", 'hold_time').hide()
                 self.settings.child("stage_parameters", 'move_acceleration').hide()
                 self.settings.child("stage_parameters", 'move_velocity').hide()
                 self.settings.child('stage_parameters', 'is_referenced').hide()
@@ -262,8 +276,9 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
             info = "Smaract stage initialized"
 
         except Exception as e:
-            info = "Error: " + str(e)
+            info = str(e)
             initialized = False
+            print(e)
 
         return info, initialized
 
@@ -354,15 +369,14 @@ class DAQ_Move_SmarActMCS2_PySDK(DAQ_Move_base):
                 self.move_mode = ctl.MoveMode.CL_ABSOLUTE
                 ctlerr('SetProperty_i32',self.controller, channel, ctl.Property.MOVE_MODE, self.move_mode)
             value *= 1e6  # Back to picometers or nanodegrees
-
-        # Move command
-        ctlerr('Move', self.controller, channel, int(value), 0)
+            # Move command
+            ctlerr('Move', self.controller, channel, int(value), 0)
 
         # If in step mode, we manually update the position
-        if not self.has_sensor:
-            self.current_position = value
-            self.step_position = value
-            self.parent.check_position()
+        else:
+            # In step mode we can only do relative
+            rel_move = value - self.step_position
+            self.move_rel(rel_move)
 
         self.emit_status(ThreadCommand('Update_Status', [f'Moving to {self.target_value}']))
 
