@@ -1,6 +1,6 @@
 from pymodaq.control_modules.move_utility_classes import DAQ_Move_base, main
-from pymodaq.daq_move.utility_classes import comon_parameters
-from pymodaq.daq_utils.daq_utils import ThreadCommand
+from pymodaq.control_modules.move_utility_classes import comon_parameters
+from pymodaq.utils.daq_utils import ThreadCommand
 from easydict import EasyDict as edict
 from instrumental import instrument, Q_, list_instruments
 
@@ -36,7 +36,7 @@ class DAQ_Move_SmarAct(DAQ_Move_base):
              "limits": ["Master", "Slave"],},
             {"title": "Axis:", "name": "axis", "type": "list", "limits": stage_names},
             ],},
-    ] + comon_parameters
+    ] + comon_parameters()
     ##########################################################
 
     def __init__(self, parent=None, params_state=None):
